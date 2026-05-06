@@ -1,0 +1,44 @@
+name: Capture YouTube Live
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # every 5 minutes
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube Live URL'
+        default: 'https://www.youtube.com/@now14/live'
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ffmpeg + yt-dlp
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          pip install -q yt-dlp
+      - name: Read URL
+        id: url
+        run: |
+          if [ -n "${{ inputs.url }}" ]; then
+            echo "URL=${{ inputs.url }}" >> $GITHUB_OUTPUT
+          elif [ -f "youtube_url.txt" ]; then
+            echo "URL=$(cat youtube_url.txt)" >> $GITHUB_OUTPUT
+          else
+            echo "URL=https://www.youtube.com/@now14/live" >> $GITHUB_OUTPUT
+          fi
+      - name: Capture audio
+        run: |
+          STREAM=$(yt-dlp -g -f bestaudio "${{ steps.url.outputs.URL }}" | head -1)
+          echo "Got stream: ${STREAM:0:80}..."
+          ffmpeg -y -i "$STREAM" -t 240 -ar 8000 -ac 1 -acodec pcm_s16le -loglevel error stream.wav
+          ls -lh stream.wav
+      - name: Commit WAV
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add stream.wav
+          git diff --staged --quiet || git commit -m "chore: stream $(date -u +%H:%M)"
+          git push
