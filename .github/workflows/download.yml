@@ -1,0 +1,55 @@
+name: Download YouTube MP4
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'YouTube URL'
+        required: true
+      filename:
+        description: 'Output filename (no extension)'
+        required: true
+        default: 'video'
+      quality:
+        description: 'Quality (720, 480, 360, audio)'
+        required: false
+        default: '720'
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yt-dlp + ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          pip install -q --upgrade yt-dlp
+      - name: Download
+        run: |
+          mkdir -p downloads
+          NAME="${{ inputs.filename }}"
+          Q="${{ inputs.quality }}"
+          if [ "$Q" = "audio" ]; then
+            yt-dlp -x --audio-format mp3 --audio-quality 0 -o "downloads/${NAME}.%(ext)s" "${{ inputs.url }}"
+          else
+            yt-dlp -f "bestvideo[height<=${Q}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${Q}][ext=mp4]/best[height<=${Q}]" \
+              --merge-output-format mp4 \
+              -o "downloads/${NAME}.%(ext)s" "${{ inputs.url }}"
+          fi
+          ls -lh downloads/
+          SIZE=$(stat -c%s downloads/${NAME}.* 2>/dev/null | head -1)
+          echo "Size: $SIZE bytes"
+          if [ "$SIZE" -gt 99000000 ]; then
+            echo "::error::File too large for git (>99MB). Try lower quality."
+            exit 1
+          fi
+      - name: Commit
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add downloads/
+          git diff --staged --quiet || git commit -m "download: ${{ inputs.filename }}"
+          git push
