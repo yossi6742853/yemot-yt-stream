@@ -22,20 +22,30 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Install yt-dlp + ffmpeg
+      - name: Install yt-dlp + ffmpeg + deno
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg unzip curl
+          curl -fsSL https://deno.land/install.sh | sh
+          echo "$HOME/.deno/bin" >> $GITHUB_PATH
           pip install -q --upgrade yt-dlp
       - name: Download
+        env:
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
         run: |
           mkdir -p downloads
           NAME="${{ inputs.filename }}"
           Q="${{ inputs.quality }}"
+          COOKIE_FLAG=""
+          if [ -n "$YT_COOKIES_B64" ]; then
+            echo "$YT_COOKIES_B64" | base64 -d > /tmp/cookies.txt
+            COOKIE_FLAG="--cookies /tmp/cookies.txt"
+          fi
+          COMMON="$COOKIE_FLAG --extractor-args youtube:player_client=tv_simply,mweb,web_safari,ios,android_vr --user-agent Mozilla/5.0"
           if [ "$Q" = "audio" ]; then
-            yt-dlp -x --audio-format mp3 --audio-quality 0 -o "downloads/${NAME}.%(ext)s" "${{ inputs.url }}"
+            yt-dlp $COMMON -x --audio-format mp3 --audio-quality 0 -o "downloads/${NAME}.%(ext)s" "${{ inputs.url }}"
           else
-            yt-dlp -f "bestvideo[height<=${Q}][ext=mp4]+bestaudio[ext=m4a]/best[height<=${Q}][ext=mp4]/best[height<=${Q}]" \
+            yt-dlp $COMMON -f "bestvideo[height<=${Q}]+bestaudio/best[height<=${Q}]/best" \
               --merge-output-format mp4 \
               -o "downloads/${NAME}.%(ext)s" "${{ inputs.url }}"
           fi
