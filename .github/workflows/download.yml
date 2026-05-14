@@ -22,32 +22,70 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Install yt-dlp + ffmpeg + deno
+      - name: Install ffmpeg + jq
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg unzip curl
-          curl -fsSL https://deno.land/install.sh | sh
-          echo "$HOME/.deno/bin" >> $GITHUB_PATH
-          pip install -q --upgrade yt-dlp
-      - name: Download
-        env:
-          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+          sudo apt-get install -y ffmpeg jq curl
+      - name: Download via cobalt.tools API
         run: |
           mkdir -p downloads
           NAME="${{ inputs.filename }}"
           Q="${{ inputs.quality }}"
-          COOKIE_FLAG=""
-          if [ -n "$YT_COOKIES_B64" ]; then
-            echo "$YT_COOKIES_B64" | base64 -d > /tmp/cookies.txt
-            COOKIE_FLAG="--cookies /tmp/cookies.txt"
-          fi
-          COMMON="$COOKIE_FLAG --extractor-args youtube:player_client=tv_simply,mweb,web_safari,ios,android_vr --user-agent Mozilla/5.0"
+          URL="${{ inputs.url }}"
+
+          # Cobalt.tools community instances (try several)
+          INSTANCES=(
+            "https://api.cobalt.tools"
+            "https://co.eepy.today/api"
+            "https://cobalt-backend.canine.tools"
+            "https://api.cobalt.canine.tools"
+            "https://capi.oak.li"
+            "https://dwnld.nichind.dev"
+          )
+
           if [ "$Q" = "audio" ]; then
-            yt-dlp $COMMON -x --audio-format mp3 --audio-quality 0 -o "downloads/${NAME}.%(ext)s" "${{ inputs.url }}"
+            BODY=$(jq -nc --arg u "$URL" '{url:$u,downloadMode:"audio",audioFormat:"mp3",audioBitrate:"320"}')
+            EXT="mp3"
           else
-            yt-dlp $COMMON -f "bestvideo[height<=${Q}]+bestaudio/best[height<=${Q}]/best" \
-              --merge-output-format mp4 \
-              -o "downloads/${NAME}.%(ext)s" "${{ inputs.url }}"
+            BODY=$(jq -nc --arg u "$URL" --arg q "$Q" '{url:$u,videoQuality:$q,filenameStyle:"basic"}')
+            EXT="mp4"
+          fi
+          echo "Body: $BODY"
+
+          DOWNLOAD_URL=""
+          for API in "${INSTANCES[@]}"; do
+            echo "=== trying $API ==="
+            RESP=$(curl -s -X POST "$API/" \
+              -H "Accept: application/json" \
+              -H "Content-Type: application/json" \
+              -H "User-Agent: Mozilla/5.0" \
+              --data "$BODY" --max-time 30 || echo '{}')
+            echo "Response: ${RESP:0:300}"
+            STATUS=$(echo "$RESP" | jq -r '.status // ""')
+            if [ "$STATUS" = "tunnel" ] || [ "$STATUS" = "redirect" ] || [ "$STATUS" = "stream" ]; then
+              DOWNLOAD_URL=$(echo "$RESP" | jq -r '.url')
+              echo "Got tunnel URL from $API"
+              break
+            fi
+          done
+
+          if [ -z "$DOWNLOAD_URL" ]; then
+            echo "::error::No instance returned a usable URL"
+            exit 1
+          fi
+
+          curl -sL "$DOWNLOAD_URL" -o "downloads/${NAME}.${EXT}" --max-time 600
+          ls -lh downloads/
+          SIZE=$(stat -c%s "downloads/${NAME}.${EXT}")
+          echo "Size: $SIZE bytes"
+          if [ "$SIZE" -gt 99000000 ]; then
+            echo "::error::File too large for git (>99MB)"
+            exit 1
+          fi
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "::error::File too small, likely error response"
+            head -c 500 "downloads/${NAME}.${EXT}"
+            exit 1
           fi
           ls -lh downloads/
           SIZE=$(stat -c%s downloads/${NAME}.* 2>/dev/null | head -1)
