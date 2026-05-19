@@ -29,13 +29,25 @@ jobs:
           else
             echo "URL=https://www.youtube.com/@now14/live" >> $GITHUB_OUTPUT
           fi
-      - name: Capture audio
+      - name: Check if channel is live
+        id: live_check
         run: |
-          STREAM=$(yt-dlp -g -f bestaudio "${{ steps.url.outputs.URL }}" | head -1)
-          echo "Got stream: ${STREAM:0:80}..."
-          ffmpeg -y -i "$STREAM" -t 240 -ar 8000 -ac 1 -acodec pcm_s16le -loglevel error stream.wav
+          STREAM=$(yt-dlp -g -f bestaudio "${{ steps.url.outputs.URL }}" 2>&1 | head -1 || true)
+          if echo "$STREAM" | grep -qE '^https?://'; then
+            echo "is_live=true" >> $GITHUB_OUTPUT
+            echo "STREAM=$STREAM" >> $GITHUB_OUTPUT
+            echo "Channel is live, will capture"
+          else
+            echo "is_live=false" >> $GITHUB_OUTPUT
+            echo "Channel is NOT live — exiting cleanly (no failure)"
+          fi
+      - name: Capture audio
+        if: steps.live_check.outputs.is_live == 'true'
+        run: |
+          ffmpeg -y -i "${{ steps.live_check.outputs.STREAM }}" -t 240 -ar 8000 -ac 1 -acodec pcm_s16le -loglevel error stream.wav
           ls -lh stream.wav
       - name: Commit WAV
+        if: steps.live_check.outputs.is_live == 'true'
         run: |
           git config user.email "actions@github.com"
           git config user.name "github-actions"
